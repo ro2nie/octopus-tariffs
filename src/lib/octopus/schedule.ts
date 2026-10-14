@@ -4,18 +4,50 @@ import type { PriceInterval, PriceSlot } from './types';
 export const SLOT_MINUTES = 30;
 export const SLOT_MS = SLOT_MINUTES * 60_000;
 
+/** A nightly cheap window, expressed as minutes into the local day. */
+export interface OffPeakWindow {
+	startMinutes: number;
+	endMinutes: number;
+}
+
 /**
  * Intelligent Octopus Go's super-low window. Published in the tariff
  * description as "23:30 - 05:30 every night" and stable across products.
  */
-export const OFF_PEAK_START_MINUTES = 23 * 60 + 30; // 23:30
-export const OFF_PEAK_END_MINUTES = 5 * 60 + 30; // 05:30
+export const INTELLIGENT_GO_WINDOW: OffPeakWindow = {
+	startMinutes: 23 * 60 + 30, // 23:30
+	endMinutes: 5 * 60 + 30 // 05:30
+};
 
-/** True when an instant falls inside the Intelligent Go off-peak window. */
-export function isOffPeakInstant(instant: Date, timeZone: string = LONDON_TZ): boolean {
+/** Classic Octopus Go's four cheaper hours: "00:30 - 04:30 every night". */
+export const OCTOPUS_GO_WINDOW: OffPeakWindow = {
+	startMinutes: 0 * 60 + 30, // 00:30
+	endMinutes: 4 * 60 + 30 // 04:30
+};
+
+/** Intelligent Go's window bounds, kept for backwards compatibility. */
+export const OFF_PEAK_START_MINUTES = INTELLIGENT_GO_WINDOW.startMinutes; // 23:30
+export const OFF_PEAK_END_MINUTES = INTELLIGENT_GO_WINDOW.endMinutes; // 05:30
+
+/**
+ * True when a local wall-clock time (minutes into the day) falls inside a
+ * window, correctly handling windows that wrap past midnight.
+ */
+export function isWithinWindow(minutesIntoDay: number, window: OffPeakWindow): boolean {
+	if (window.startMinutes < window.endMinutes) {
+		return minutesIntoDay >= window.startMinutes && minutesIntoDay < window.endMinutes;
+	}
+	return minutesIntoDay >= window.startMinutes || minutesIntoDay < window.endMinutes;
+}
+
+/** True when an instant falls inside a window. Defaults to Intelligent Go's. */
+export function isOffPeakInstant(
+	instant: Date,
+	window: OffPeakWindow = INTELLIGENT_GO_WINDOW,
+	timeZone: string = LONDON_TZ
+): boolean {
 	const { hour, minute } = getZonedParts(instant, timeZone);
-	const minutesIntoDay = hour * 60 + minute;
-	return minutesIntoDay >= OFF_PEAK_START_MINUTES || minutesIntoDay < OFF_PEAK_END_MINUTES;
+	return isWithinWindow(hour * 60 + minute, window);
 }
 
 /** Resolve the unit rate (p/kWh inc VAT) applicable at a given instant. */
@@ -51,10 +83,11 @@ export function priceResolverFromIntervals(intervals: readonly PriceInterval[]):
 export function priceResolverFromBands(
 	peakPriceIncVat: number,
 	offPeakPriceIncVat: number,
+	window: OffPeakWindow = INTELLIGENT_GO_WINDOW,
 	timeZone: string = LONDON_TZ
 ): PriceResolver {
 	return (instant: Date) =>
-		isOffPeakInstant(instant, timeZone) ? offPeakPriceIncVat : peakPriceIncVat;
+		isOffPeakInstant(instant, window, timeZone) ? offPeakPriceIncVat : peakPriceIncVat;
 }
 
 /** The UTC instant at which the local day after `dayStart` begins. */
@@ -76,6 +109,7 @@ export function nextZonedDayStart(dayStart: Date, timeZone: string = LONDON_TZ):
 export function buildDaySlots(
 	date: Date,
 	resolve: PriceResolver,
+	window: OffPeakWindow = INTELLIGENT_GO_WINDOW,
 	timeZone: string = LONDON_TZ
 ): PriceSlot[] {
 	const start = startOfZonedDay(date, timeZone);
@@ -90,7 +124,7 @@ export function buildDaySlots(
 			start: slotStart,
 			end: new Date(Math.min(t + SLOT_MS, end.getTime())),
 			priceIncVat: price,
-			offPeak: isOffPeakInstant(slotStart, timeZone)
+			offPeak: isOffPeakInstant(slotStart, window, timeZone)
 		});
 	}
 
@@ -138,24 +172,65 @@ export interface OffPeakStatus {
 	changesAt: Date;
 	/** The off-peak state after the change. */
 	changesTo: boolean;
+	/** Wording for the countdown row, e.g. "Off-peak ends". */
+	label: string;
 }
 
 /**
  * Whether we are currently in the cheap window, and when that next flips.
  * Works even after 23:30, when the change (05:30) falls on the next day.
  */
-export function getOffPeakStatus(instant: Date, timeZone: string = LONDON_TZ): OffPeakStatus {
-	const offPeak = isOffPeakInstant(instant, timeZone);
-	const [hour, minute, changesTo] = offPeak
-		? [OFF_PEAK_END_MINUTES / 60, OFF_PEAK_END_MINUTES % 60, false]
-		: [Math.floor(OFF_PEAK_START_MINUTES / 60), OFF_PEAK_START_MINUTES % 60, true];
+export function getOffPeakStatus(
+	instant: Date,
+	window: OffPeakWindow = INTELLIGENT_GO_WINDOW,
+	timeZone: string = LONDON_TZ
+): OffPeakStatus {
+	const { hour, minute } = getZonedParts(instant, timeZone);
+	const offPeak = isWithinWindow(hour * 60 + minute, window);
+	const target = offPeak ? window.endMinutes : window.startMinutes;
 
-	let at = zonedTimeOnDay(instant, hour, minute, 0, timeZone);
+	let at = zonedTimeOnDay(instant, Math.floor(target / 60), target % 60, 0, timeZone);
 	if (at.getTime() <= instant.getTime()) {
-		at = zonedTimeOnDay(instant, hour, minute, 1, timeZone);
+		at = zonedTimeOnDay(instant, Math.floor(target / 60), target % 60, 1, timeZone);
 	}
 
-	return { offPeak, changesAt: at, changesTo };
+	return {
+		offPeak,
+		changesAt: at,
+		changesTo: !offPeak,
+		label: offPeak ? 'Off-peak ends' : 'Off-peak starts'
+	};
+}
+
+/**
+ * Mark slots as off-peak when cheaper than the day's average price. Agile has no
+ * fixed cheap window, so "cheap" is relative to the rest of the day.
+ */
+export function classifyRelativeOffPeak(slots: readonly PriceSlot[]): boolean[] {
+	const prices = slots.map((slot) => slot.priceIncVat).filter((price) => Number.isFinite(price));
+	if (prices.length === 0) return slots.map(() => false);
+
+	const average = prices.reduce((sum, price) => sum + price, 0) / prices.length;
+	return slots.map((slot) => slot.priceIncVat < average);
+}
+
+/**
+ * Status for tariffs whose price changes every slot (Agile): report the current
+ * slot's cheap/expensive state and when the next half-hour rate begins.
+ */
+export function getSlotStatus(slots: readonly PriceSlot[], now: Date): OffPeakStatus {
+	const current = getCurrentSlot(slots, now);
+	if (!current) {
+		return { offPeak: false, changesAt: now, changesTo: false, label: 'Price changes' };
+	}
+
+	const next = slots[slots.indexOf(current) + 1];
+	return {
+		offPeak: current.offPeak,
+		changesAt: current.end,
+		changesTo: next ? next.offPeak : !current.offPeak,
+		label: 'Price changes'
+	};
 }
 
 /** Min and max unit rates across the day, rounded out to nice bounds. */

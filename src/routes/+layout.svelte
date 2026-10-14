@@ -8,7 +8,7 @@
 
 <svelte:head>
 	<link rel="icon" href={favicon} />
-	<title>Intelligent Octopus Go · Live Prices</title>
+	<title>Octopus Energy · Live Prices</title>
 </svelte:head>
 
 {@render children()}

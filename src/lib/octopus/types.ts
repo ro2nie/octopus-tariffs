@@ -22,6 +22,15 @@ export const REGION_CODES = [
 
 export type RegionCode = (typeof REGION_CODES)[number];
 
+/**
+ * The tariff families this app understands. Each has its own product-discovery
+ * rules and its own way of deciding which half-hours count as "off-peak".
+ */
+export type TariffFamily = 'intelligent-go' | 'octopus-go' | 'agile';
+
+/** Whether a tariff measures electricity imported from the grid or exported to it. */
+export type TariffDirection = 'import' | 'export';
+
 export interface Paginated<T> {
 	count: number;
 	next: string | null;
@@ -112,6 +121,8 @@ export interface DayPrices {
 	/** ISO date (YYYY-MM-DD) of the London-local day these prices cover. */
 	date: string;
 	region: RegionCode;
+	family: TariffFamily;
+	direction: TariffDirection;
 	productCode: string;
 	productName: string;
 	tariffCode: string;

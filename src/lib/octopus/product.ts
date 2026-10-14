@@ -1,8 +1,6 @@
 import { apiGet, type FetchLike } from './client';
-import type { OctopusProduct, OctopusProductSummary, Paginated } from './types';
-
-/** Products whose display name contains this phrase are Intelligent Octopus Go. */
-export const INTELLIGENT_GO_PATTERN = /intelligent octopus go/i;
+import { getFamilyConfig } from './families';
+import type { OctopusProduct, OctopusProductSummary, Paginated, TariffFamily } from './types';
 
 const EV_SAVER_PATTERN = /ev saver/i;
 
@@ -40,23 +38,48 @@ async function fetchAllProducts(fetchFn?: FetchLike): Promise<OctopusProductSumm
 	return all;
 }
 
+function byAvailabilityThenNewest(a: OctopusProductSummary, b: OctopusProductSummary): number {
+	if (isCurrentlyAvailable(a) !== isCurrentlyAvailable(b)) {
+		return isCurrentlyAvailable(a) ? -1 : 1;
+	}
+	return Date.parse(b.available_from) - Date.parse(a.available_from);
+}
+
 /**
- * Discover the currently-listed Intelligent Octopus Go domestic products so the
- * user can pick the exact tariff they are on. Most recent first.
+ * Discover the currently-listed import electricity products for a tariff family
+ * so the user can pick the exact tariff they are on. Most recent first.
  */
-export async function listIntelligentGoProducts(
+export async function listTariffProducts(
+	family: TariffFamily,
 	fetchFn?: FetchLike
 ): Promise<OctopusProductSummary[]> {
 	const products = await fetchAllProducts(fetchFn);
+	return products.filter(getFamilyConfig(family).matches).sort(byAvailabilityThenNewest);
+}
 
-	return products
-		.filter((product) => !product.is_business && INTELLIGENT_GO_PATTERN.test(product.display_name))
-		.sort((a, b) => {
-			if (isCurrentlyAvailable(a) !== isCurrentlyAvailable(b)) {
-				return isCurrentlyAvailable(a) ? -1 : 1;
-			}
-			return Date.parse(b.available_from) - Date.parse(a.available_from);
-		});
+/** Discover the currently-listed Intelligent Octopus Go domestic products. */
+export function listIntelligentGoProducts(fetchFn?: FetchLike): Promise<OctopusProductSummary[]> {
+	return listTariffProducts('intelligent-go', fetchFn);
+}
+
+/** Discover the currently-listed classic Octopus Go domestic products. */
+export function listOctopusGoProducts(fetchFn?: FetchLike): Promise<OctopusProductSummary[]> {
+	return listTariffProducts('octopus-go', fetchFn);
+}
+
+/**
+ * Discover the currently-listed export (outgoing) products for a family, e.g.
+ * Agile Outgoing Octopus. Returns an empty list for families without one.
+ */
+export async function listExportProducts(
+	family: TariffFamily,
+	fetchFn?: FetchLike
+): Promise<OctopusProductSummary[]> {
+	const exportConfig = getFamilyConfig(family).export;
+	if (!exportConfig) return [];
+
+	const products = await fetchAllProducts(fetchFn);
+	return products.filter(exportConfig.matches).sort(byAvailabilityThenNewest);
 }
 
 /**

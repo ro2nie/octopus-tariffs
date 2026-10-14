@@ -1,13 +1,17 @@
 <script lang="ts">
-	import type { OctopusProductSummary, RegionCode } from '#lib/octopus/types';
+	import type { OctopusProductSummary, RegionCode, TariffFamily } from '#lib/octopus/types';
 	import type { LoadStatus } from '#lib/state/tariff.svelte';
+	import { getFamilyConfig } from '#lib/octopus/families';
 	import { formatClock } from '#lib/utils/time';
 	import ProductSelect from './ProductSelect.svelte';
+	import FamilyToggle from './FamilyToggle.svelte';
 
 	interface Props {
 		products: OctopusProductSummary[];
 		productCode: string;
 		onSelectProduct: (code: string) => void;
+		family: TariffFamily;
+		onSelectFamily: (family: TariffFamily) => void;
 		region: RegionCode | null;
 		status: LoadStatus;
 		lastUpdated: Date | null;
@@ -22,6 +26,8 @@
 		products,
 		productCode,
 		onSelectProduct,
+		family,
+		onSelectFamily,
 		region,
 		status,
 		lastUpdated,
@@ -31,6 +37,8 @@
 		onFullscreen,
 		onEditPostcode
 	}: Props = $props();
+
+	let config = $derived(getFamilyConfig(family));
 
 	let countdown = $derived.by(() => {
 		if (!nextRefreshAt) return null;
@@ -45,7 +53,7 @@
 	<div class="brand">
 		<span class="orb" aria-hidden="true"></span>
 		<div class="brand-text">
-			<h1>Intelligent Octopus Go</h1>
+			<h1>{config.label}</h1>
 			<span class="tagline">
 				{#if region}Region {region}{/if}
 				{#if lastUpdated}
@@ -55,6 +63,8 @@
 	</div>
 
 	<div class="actions">
+		<FamilyToggle value={family} onChange={onSelectFamily} disabled={status === 'loading'} />
+
 		<ProductSelect
 			{products}
 			value={productCode}

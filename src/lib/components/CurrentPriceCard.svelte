@@ -9,24 +9,36 @@
 		status: OffPeakStatus;
 		now: Date;
 		standingCharge: number | null;
+		cheapLabel?: string;
+		expensiveLabel?: string;
+		eyebrow?: string;
+		variant?: 'import' | 'export';
 	}
 
-	let { slot, status, now, standingCharge }: Props = $props();
+	let {
+		slot,
+		status,
+		now,
+		standingCharge,
+		cheapLabel = 'Off-peak',
+		expensiveLabel = 'Peak',
+		eyebrow = 'Right now',
+		variant = 'import'
+	}: Props = $props();
 
 	let minutesToChange = $derived(Math.max(0, Math.round(minutesBetween(now, status.changesAt))));
-	let changeLabel = $derived(status.offPeak ? 'Off-peak ends' : 'Off-peak starts');
 	let untilText = $derived(formatDuration(minutesToChange));
 	let atText = $derived(formatTime(status.changesAt));
 </script>
 
-<section class="current panel" aria-label="Current unit rate">
+<section class="current panel" class:export={variant === 'export'} aria-label="Current unit rate">
 	<div class="glow" class:offpeak={status.offPeak} aria-hidden="true"></div>
 
 	<div class="head">
-		<span class="eyebrow">Right now</span>
+		<span class="eyebrow">{eyebrow}</span>
 		<span class="pill" class:offpeak={status.offPeak} class:peak={!status.offPeak}>
 			<span class="dot" aria-hidden="true"></span>
-			{status.offPeak ? 'Off-peak' : 'Peak'}
+			{status.offPeak ? cheapLabel : expensiveLabel}
 		</span>
 	</div>
 
@@ -37,7 +49,7 @@
 
 	<div class="meta">
 		<div class="meta-row">
-			<span class="meta-label">{changeLabel}</span>
+			<span class="meta-label">{status.label}</span>
 			<span class="meta-value tabular">in {untilText}</span>
 		</div>
 		<div class="meta-row muted">
@@ -75,6 +87,10 @@
 
 	.glow.offpeak {
 		background: radial-gradient(closest-side, rgba(52, 211, 153, 0.38), transparent);
+	}
+
+	.current.export .glow {
+		background: radial-gradient(closest-side, rgba(245, 158, 11, 0.34), transparent);
 	}
 
 	.head {
@@ -131,6 +147,13 @@
 		font-weight: 750;
 		letter-spacing: -0.04em;
 		background: linear-gradient(120deg, #ffffff, var(--primary-soft) 70%, var(--accent));
+		-webkit-background-clip: text;
+		background-clip: text;
+		color: transparent;
+	}
+
+	.current.export .value {
+		background: linear-gradient(120deg, #ffffff, #fcd34d 70%, var(--export));
 		-webkit-background-clip: text;
 		background-clip: text;
 		color: transparent;

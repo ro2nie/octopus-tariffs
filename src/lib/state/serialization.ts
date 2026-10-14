@@ -1,13 +1,26 @@
-import type { DayPrices, PriceSlot, RegionCode } from '#lib/octopus/types';
+import type {
+	DayPrices,
+	PriceSlot,
+	RegionCode,
+	TariffDirection,
+	TariffFamily
+} from '#lib/octopus/types';
 
 export interface SerializedPriceSlot extends Omit<PriceSlot, 'start' | 'end'> {
 	start: string;
 	end: string;
 }
 
-export interface SerializedDayPrices extends Omit<DayPrices, 'slots' | 'fetchedAt'> {
+export interface SerializedDayPrices extends Omit<
+	DayPrices,
+	'slots' | 'fetchedAt' | 'family' | 'direction'
+> {
 	slots: SerializedPriceSlot[];
 	fetchedAt: string;
+	/** Optional so snapshots saved before tariff families existed still restore. */
+	family?: TariffFamily;
+	/** Optional so snapshots saved before export tariffs existed still restore. */
+	direction?: TariffDirection;
 }
 
 /** Convert a `DayPrices` value into a JSON-safe shape for localStorage. */
@@ -27,6 +40,8 @@ export function deserializeDayPrices(data: SerializedDayPrices): DayPrices {
 	return {
 		...data,
 		region: data.region as RegionCode,
+		family: data.family ?? 'intelligent-go',
+		direction: data.direction ?? 'import',
 		fetchedAt: new Date(data.fetchedAt),
 		slots: data.slots.map((slot) => ({
 			...slot,

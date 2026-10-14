@@ -34,6 +34,14 @@
 	--chart-fill-from: rgba(139, 92, 246, 0.45);
 	--chart-fill-to: rgba(139, 92, 246, 0.02);
 
+	/* Export (outgoing) series */
+	--export: #f59e0b;
+	--export-line: #fbbf24;
+	--export-soft: rgba(245, 158, 11, 0.16);
+	--chart-export-line: #fbbf24;
+	--chart-export-fill-from: rgba(245, 158, 11, 0.4);
+	--chart-export-fill-to: rgba(245, 158, 11, 0.02);
+
 	/* LayerChart expects these names */
 	--color-primary: var(--primary);
 	--color-secondary: var(--accent);
@@ -88,7 +96,8 @@ body {
 	-webkit-font-smoothing: antialiased;
 	text-rendering: optimizeLegibility;
 	min-height: 100vh;
-	overflow: hidden;
+	overflow-x: hidden;
+	overflow-y: auto;
 }
 
 #svelte {

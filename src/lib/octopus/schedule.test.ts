@@ -1,14 +1,19 @@
 import { describe, expect, it } from 'vitest';
 import {
 	buildDaySlots,
+	classifyRelativeOffPeak,
 	getCurrentSlot,
 	getOffPeakStatus,
+	getSlotStatus,
+	INTELLIGENT_GO_WINDOW,
 	isOffPeakInstant,
+	isWithinWindow,
+	OCTOPUS_GO_WINDOW,
 	priceBounds,
 	priceResolverFromBands,
 	priceResolverFromIntervals
 } from './schedule';
-import type { PriceInterval } from './types';
+import type { PriceInterval, PriceSlot } from './types';
 
 describe('isOffPeakInstant', () => {
 	it.each([
@@ -20,6 +25,39 @@ describe('isOffPeakInstant', () => {
 		['2026-01-15T12:00:00Z', false]
 	])('classifies %s as offPeak=%s', (iso, expected) => {
 		expect(isOffPeakInstant(new Date(iso))).toBe(expected);
+	});
+});
+
+describe('isWithinWindow', () => {
+	it('handles a window that wraps past midnight', () => {
+		// Intelligent Go: 23:30 – 05:30.
+		expect(isWithinWindow(23 * 60 + 30, INTELLIGENT_GO_WINDOW)).toBe(true);
+		expect(isWithinWindow(0, INTELLIGENT_GO_WINDOW)).toBe(true);
+		expect(isWithinWindow(5 * 60 + 29, INTELLIGENT_GO_WINDOW)).toBe(true);
+		expect(isWithinWindow(5 * 60 + 30, INTELLIGENT_GO_WINDOW)).toBe(false);
+		expect(isWithinWindow(12 * 60, INTELLIGENT_GO_WINDOW)).toBe(false);
+	});
+
+	it('handles a window within the same day', () => {
+		// Octopus Go: 00:30 – 04:30.
+		expect(isWithinWindow(0, OCTOPUS_GO_WINDOW)).toBe(false);
+		expect(isWithinWindow(0 * 60 + 30, OCTOPUS_GO_WINDOW)).toBe(true);
+		expect(isWithinWindow(4 * 60 + 29, OCTOPUS_GO_WINDOW)).toBe(true);
+		expect(isWithinWindow(4 * 60 + 30, OCTOPUS_GO_WINDOW)).toBe(false);
+		expect(isWithinWindow(12 * 60, OCTOPUS_GO_WINDOW)).toBe(false);
+	});
+});
+
+describe('isOffPeakInstant (Octopus Go)', () => {
+	it.each([
+		['2026-01-15T00:00:00Z', false],
+		['2026-01-15T00:30:00Z', true],
+		['2026-01-15T04:29:00Z', true],
+		['2026-01-15T04:30:00Z', false],
+		['2026-01-15T12:00:00Z', false],
+		['2026-01-15T23:30:00Z', false]
+	])('classifies %s as offPeak=%s', (iso, expected) => {
+		expect(isOffPeakInstant(new Date(iso), OCTOPUS_GO_WINDOW)).toBe(expected);
 	});
 });
 
@@ -36,6 +74,54 @@ describe('getOffPeakStatus', () => {
 		expect(status.offPeak).toBe(false);
 		expect(status.changesTo).toBe(true);
 		expect(status.changesAt.toISOString()).toBe('2026-01-15T23:30:00.000Z');
+		expect(status.label).toBe('Off-peak starts');
+	});
+
+	it('uses the given window (Octopus Go 00:30 – 04:30)', () => {
+		const within = getOffPeakStatus(new Date('2026-01-15T02:00:00Z'), OCTOPUS_GO_WINDOW);
+		expect(within.offPeak).toBe(true);
+		expect(within.changesTo).toBe(false);
+		expect(within.changesAt.toISOString()).toBe('2026-01-15T04:30:00.000Z');
+
+		const outside = getOffPeakStatus(new Date('2026-01-15T12:00:00Z'), OCTOPUS_GO_WINDOW);
+		expect(outside.offPeak).toBe(false);
+		expect(outside.changesTo).toBe(true);
+		expect(outside.changesAt.toISOString()).toBe('2026-01-16T00:30:00.000Z');
+	});
+});
+
+describe('classifyRelativeOffPeak', () => {
+	const slots: PriceSlot[] = [4, 4, 4, 12].map((price, index) => ({
+		start: new Date(`2026-01-15T0${index}:00:00Z`),
+		end: new Date(`2026-01-15T0${index}:30:00Z`),
+		priceIncVat: price,
+		offPeak: false
+	}));
+
+	it('marks below-average slots as off-peak', () => {
+		expect(classifyRelativeOffPeak(slots)).toEqual([true, true, true, false]);
+	});
+
+	it('marks nothing when there are no prices', () => {
+		expect(classifyRelativeOffPeak([])).toEqual([]);
+	});
+});
+
+describe('getSlotStatus', () => {
+	const slots = buildDaySlots(new Date('2026-01-15T09:00:00Z'), priceResolverFromBands(32, 8));
+
+	it('points at the end of the current half-hour slot', () => {
+		const status = getSlotStatus(slots, new Date('2026-01-15T12:15:00Z'));
+		expect(status.label).toBe('Price changes');
+		expect(status.offPeak).toBe(false);
+		expect(status.changesAt.toISOString()).toBe('2026-01-15T12:30:00.000Z');
+	});
+
+	it('falls back gracefully with no slots', () => {
+		const now = new Date('2026-01-15T12:15:00Z');
+		const status = getSlotStatus([], now);
+		expect(status.offPeak).toBe(false);
+		expect(status.changesAt).toBe(now);
 	});
 });
 

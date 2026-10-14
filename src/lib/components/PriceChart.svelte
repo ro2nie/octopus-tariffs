@@ -10,9 +10,25 @@
 		slots: PriceSlot[];
 		now: Date;
 		height?: number;
+		variant?: 'import' | 'export';
+		label?: string;
+		cheapLabel?: string;
+		expensiveLabel?: string;
 	}
 
-	let { slots, now, height = 360 }: Props = $props();
+	let {
+		slots,
+		now,
+		height = 360,
+		variant = 'import',
+		label = 'Import',
+		cheapLabel = 'Cheaper',
+		expensiveLabel = 'Pricier'
+	}: Props = $props();
+
+	let isExport = $derived(variant === 'export');
+	let gradientId = $derived(isExport ? 'export-fill' : 'price-fill');
+	let lineColor = $derived(isExport ? 'var(--export-line)' : 'var(--chart-line)');
 
 	interface ChartPoint {
 		start: Date;
@@ -38,7 +54,13 @@
 		const max = Math.max(...slots.map((slot) => slot.priceIncVat), 0);
 		return Math.ceil((max * 1.18) / 5) * 5 || 5;
 	});
-	let yDomain = $derived([0, yMax] as [number, number]);
+	// Prices can go negative (Agile), so the axis may need to extend below zero.
+	let yMin = $derived.by(() => {
+		if (!slots.length) return 0;
+		const min = Math.min(...slots.map((slot) => slot.priceIncVat), 0);
+		return Math.floor((min * 1.1) / 5) * 5;
+	});
+	let yDomain = $derived([yMin, yMax] as [number, number]);
 
 	// X ticks every three hours at the top of the hour.
 	let hourTicks = $derived.by(() => {
@@ -47,8 +69,10 @@
 		return hours.map((hour) => zonedTimeToUtc({ year, month, day, hour, minute: 0 }));
 	});
 
-	// Contiguous off-peak ranges, drawn as a soft background band.
+	// Contiguous off-peak ranges, drawn as a soft background band. Only meaningful
+	// for the import series: for export, a cheaper slot is not a "good" one.
 	let offPeakBands = $derived.by(() => {
+		if (isExport) return [];
 		const bands: { start: Date; end: Date }[] = [];
 		for (const slot of slots) {
 			if (!slot.offPeak) continue;
@@ -90,9 +114,15 @@
 			{#snippet children({ context })}
 				<Layer>
 					<defs>
-						<linearGradient id="price-fill" x1="0" y1="0" x2="0" y2="1">
-							<stop offset="0%" stop-color="var(--chart-fill-from)" />
-							<stop offset="100%" stop-color="var(--chart-fill-to)" />
+						<linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
+							<stop
+								offset="0%"
+								stop-color={isExport ? 'var(--chart-export-fill-from)' : 'var(--chart-fill-from)'}
+							/>
+							<stop
+								offset="100%"
+								stop-color={isExport ? 'var(--chart-export-fill-to)' : 'var(--chart-fill-to)'}
+							/>
 						</linearGradient>
 					</defs>
 
@@ -111,8 +141,8 @@
 
 					<Area
 						curve={curveStepAfter}
-						fill="url(#price-fill)"
-						line={{ stroke: 'var(--chart-line)', strokeWidth: 2.5 }}
+						fill={`url(#${gradientId})`}
+						line={{ stroke: lineColor, strokeWidth: isExport ? 2 : 2.5 }}
 					/>
 
 					<!-- Current time marker -->
@@ -145,8 +175,11 @@
 						</Tooltip.Header>
 						<Tooltip.List>
 							<Tooltip.Item
-								label={data.offPeak ? 'Off-peak' : 'Peak'}
+								label={isExport
+									? label
+									: `${label} · ${data.offPeak ? cheapLabel : expensiveLabel}`}
 								value={`${formatPriceValue(data.price)}p/kWh`}
+								color={lineColor}
 							/>
 						</Tooltip.List>
 					{/snippet}

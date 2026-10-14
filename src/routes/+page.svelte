@@ -1,7 +1,8 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { TariffStore, REFRESH_INTERVAL_MS } from '#lib/state/tariff.svelte';
-	import { getCurrentSlot, getOffPeakStatus, priceBounds } from '#lib/octopus/schedule';
+	import { getCurrentSlot, priceBounds } from '#lib/octopus/schedule';
+	import { getFamilyConfig } from '#lib/octopus/families';
 	import { formatPrice, formatStandingCharge } from '#lib/utils/format';
 	import { formatDay } from '#lib/utils/time';
 	import StatusBar from '#lib/components/StatusBar.svelte';
@@ -16,13 +17,29 @@
 	let now = $state(new Date());
 	let editing = $state(false);
 	let started = $state(false);
+	let showExport = $state(true);
 
 	let showConnect = $derived(editing || !store.hasPostcode);
 
 	let slots = $derived(store.prices?.slots ?? []);
+	let hasExport = $derived((store.outgoing?.slots.length ?? 0) > 0);
+	let exportSlots = $derived(store.outgoing?.slots ?? []);
 	let currentSlot = $derived(getCurrentSlot(slots, now));
-	let offPeak = $derived(getOffPeakStatus(now));
+	let config = $derived(getFamilyConfig(store.family));
+	let priceStatus = $derived(config.status(slots, now));
 	let bounds = $derived(priceBounds(slots));
+	let average = $derived.by(() => {
+		if (!slots.length) return null;
+		return slots.reduce((sum, slot) => sum + slot.priceIncVat, 0) / slots.length;
+	});
+
+	let outgoingCurrentSlot = $derived(getCurrentSlot(exportSlots, now));
+	let outgoingStatus = $derived(config.status(exportSlots, now));
+	let outgoingBounds = $derived(priceBounds(exportSlots));
+	let outgoingAverage = $derived.by(() => {
+		if (!exportSlots.length) return null;
+		return exportSlots.reduce((sum, slot) => sum + slot.priceIncVat, 0) / exportSlots.length;
+	});
 	let nextRefreshAt = $derived(
 		store.lastUpdated ? new Date(store.lastUpdated.getTime() + REFRESH_INTERVAL_MS) : null
 	);
@@ -106,7 +123,7 @@
 </script>
 
 <svelte:head>
-	<title>Intelligent Octopus Go · Live Prices</title>
+	<title>Octopus Energy · Live Prices</title>
 </svelte:head>
 
 {#if showConnect}
@@ -115,7 +132,7 @@
 			<div class="connect-head">
 				<span class="orb" aria-hidden="true"></span>
 				<div>
-					<h1>Intelligent Octopus Go</h1>
+					<h1>Octopus Energy</h1>
 					<p>Live half-hourly unit rates for your region.</p>
 				</div>
 			</div>
@@ -127,7 +144,8 @@
 			{/if}
 
 			<ul class="features">
-				<li>Live current price with off-peak countdown</li>
+				<li>Intelligent Octopus Go, Octopus Go and Agile Octopus import tariffs</li>
+				<li>Live current price with a countdown to the next change</li>
 				<li>Whole-day price curve, refreshed every 10 minutes</li>
 				<li>Built for always-on kiosk displays</li>
 			</ul>
@@ -145,6 +163,8 @@
 			products={store.products}
 			productCode={store.productCode}
 			onSelectProduct={(code) => store.selectProduct(code)}
+			family={store.family}
+			onSelectFamily={(family) => store.setFamily(family)}
 			region={store.region}
 			status={store.status}
 			lastUpdated={store.lastUpdated}
@@ -160,52 +180,161 @@
 		{/if}
 
 		<main class="grid">
-			<div class="left">
-				{#if currentSlot}
-					<CurrentPriceCard
-						slot={currentSlot}
-						status={offPeak}
-						{now}
-						standingCharge={store.prices?.standingChargeIncVat ?? null}
-					/>
-				{:else}
-					<section class="panel skeleton" aria-busy="true">Loading live prices…</section>
-				{/if}
-
+			{#snippet rateStats(
+				highest: number,
+				lowest: number,
+				standing: number | null,
+				avg: number | null
+			)}
 				<div class="stats">
-					<StatTile label="Peak rate" value={formatPrice(bounds.max)} tone="peak" />
-					<StatTile label="Off-peak rate" value={formatPrice(bounds.min)} tone="offpeak" />
-					<StatTile
-						label="Standing charge"
-						value={formatStandingCharge(store.prices?.standingChargeIncVat ?? null)}
-					/>
-					<StatTile label="Daily window" value="23:30 – 05:30" hint="every night" />
+					<StatTile label="Highest" value={formatPrice(highest)} tone="peak" />
+					<StatTile label="Lowest" value={formatPrice(lowest)} tone="offpeak" />
+					<StatTile label="Standing charge" value={formatStandingCharge(standing)} />
+					<StatTile label="Day average" value={formatPrice(avg)} hint="across half-hour slots" />
 				</div>
-			</div>
+			{/snippet}
 
-			<section class="panel chart-panel" aria-label="Today's price curve">
-				<header class="chart-head">
-					<div>
-						<span class="eyebrow">Today's curve</span>
-						<h2>{store.prices ? formatDay(new Date(`${store.prices.date}T12:00:00Z`)) : '—'}</h2>
-					</div>
-					<div class="legend">
-						<span class="legend-item"><i class="swatch offpeak"></i>Off-peak</span>
-						<span class="legend-item"><i class="swatch now"></i>Now</span>
-					</div>
-				</header>
+			<section class="block" aria-label="Imported electricity">
+				<div class="block-left">
+					{#if currentSlot}
+						<CurrentPriceCard
+							slot={currentSlot}
+							status={priceStatus}
+							{now}
+							standingCharge={store.prices?.standingChargeIncVat ?? null}
+							cheapLabel={config.cheapLabel}
+							expensiveLabel={config.expensiveLabel}
+						/>
+					{:else}
+						<section class="panel skeleton" aria-busy="true">Loading live prices…</section>
+					{/if}
 
-				{#if slots.length > 0}
-					<PriceChart {slots} {now} height={420} />
-				{:else}
-					<div class="chart-skeleton" aria-busy="true">Fetching today's rates…</div>
-				{/if}
+					{#if store.family === 'agile'}
+						{@render rateStats(
+							bounds.max,
+							bounds.min,
+							store.prices?.standingChargeIncVat ?? null,
+							average
+						)}
+					{:else}
+						<div class="stats">
+							<StatTile label="Peak rate" value={formatPrice(bounds.max)} tone="peak" />
+							<StatTile label="Off-peak rate" value={formatPrice(bounds.min)} tone="offpeak" />
+							<StatTile
+								label="Standing charge"
+								value={formatStandingCharge(store.prices?.standingChargeIncVat ?? null)}
+							/>
+							<StatTile label="Daily window" value={config.windowLabel ?? '—'} hint="every night" />
+						</div>
+					{/if}
+				</div>
 
-				<footer class="chart-foot">
-					<span>{store.prices?.productName ?? ''}</span>
-					<span class="mono">{store.prices?.tariffCode ?? ''}</span>
-				</footer>
+				<div class="block-right">
+					<section class="panel chart-panel" aria-label="Today's import price curve">
+						<header class="chart-head">
+							<div>
+								<span class="eyebrow">Today's import curve</span>
+								<h2>
+									{store.prices ? formatDay(new Date(`${store.prices.date}T12:00:00Z`)) : '—'}
+								</h2>
+							</div>
+							<div class="legend">
+								<span class="legend-item"><i class="swatch offpeak"></i>{config.cheapLabel}</span>
+								<span class="legend-item"><i class="swatch import"></i>{config.importLabel}</span>
+								{#if hasExport}
+									<button
+										type="button"
+										class="legend-item toggle"
+										class:off={!showExport}
+										aria-pressed={showExport}
+										title="Toggle the outgoing export graph"
+										onclick={() => (showExport = !showExport)}
+									>
+										<i class="swatch export"></i>{config.export?.label}
+									</button>
+								{/if}
+								<span class="legend-item"><i class="swatch now"></i>Now</span>
+							</div>
+						</header>
+
+						{#if slots.length > 0}
+							<PriceChart
+								{slots}
+								{now}
+								height={340}
+								variant="import"
+								label={config.importLabel}
+								cheapLabel={config.cheapLabel}
+								expensiveLabel={config.expensiveLabel}
+							/>
+						{:else}
+							<div class="chart-skeleton" aria-busy="true">Fetching today's rates…</div>
+						{/if}
+
+						<footer class="chart-foot">
+							<span>{store.prices?.productName ?? ''}</span>
+							<span class="mono">{store.prices?.tariffCode ?? ''}</span>
+						</footer>
+					</section>
+				</div>
 			</section>
+
+			{#if hasExport && showExport}
+				<section class="block" aria-label="Exported electricity">
+					<div class="block-left">
+						{#if outgoingCurrentSlot}
+							<CurrentPriceCard
+								slot={outgoingCurrentSlot}
+								status={outgoingStatus}
+								{now}
+								standingCharge={store.outgoing?.standingChargeIncVat ?? null}
+								cheapLabel={config.cheapLabel}
+								expensiveLabel={config.expensiveLabel}
+								eyebrow="Outgoing · right now"
+								variant="export"
+							/>
+						{/if}
+						{@render rateStats(
+							outgoingBounds.max,
+							outgoingBounds.min,
+							store.outgoing?.standingChargeIncVat ?? null,
+							outgoingAverage
+						)}
+					</div>
+
+					<div class="block-right">
+						<section class="panel chart-panel" aria-label="Today's export price curve">
+							<header class="chart-head">
+								<div>
+									<span class="eyebrow">Today's export curve</span>
+									<h2>
+										{store.outgoing ? formatDay(new Date(`${store.outgoing.date}T12:00:00Z`)) : '—'}
+									</h2>
+								</div>
+								<div class="legend">
+									<span class="legend-item"
+										><i class="swatch export"></i>{config.export?.label}</span
+									>
+									<span class="legend-item"><i class="swatch now"></i>Now</span>
+								</div>
+							</header>
+
+							<PriceChart
+								slots={exportSlots}
+								{now}
+								height={300}
+								variant="export"
+								label={config.export?.label ?? 'Export'}
+							/>
+
+							<footer class="chart-foot">
+								<span>{store.outgoing?.productName ?? ''}</span>
+								<span class="mono">{store.outgoing?.tariffCode ?? ''}</span>
+							</footer>
+						</section>
+					</div>
+				</section>
+			{/if}
 		</main>
 
 		<footer class="foot">
@@ -308,19 +437,34 @@
 		padding: clamp(16px, 2.6vw, 34px);
 	}
 
+	/* Each block pairs a "right now" display with its graph. On wide screens they
+	 * sit side by side; on narrow screens the pair stacks (card, stats, graph). */
 	.grid {
 		flex: 1;
+		display: flex;
+		flex-direction: column;
+		gap: 22px;
+		min-height: 0;
+	}
+
+	.block {
 		display: grid;
 		grid-template-columns: minmax(320px, 400px) 1fr;
 		gap: 22px;
 		align-items: stretch;
-		min-height: 0;
+		min-width: 0;
 	}
 
-	.left {
+	.block-left {
 		display: flex;
 		flex-direction: column;
 		gap: 22px;
+		min-width: 0;
+	}
+
+	.block-right {
+		display: flex;
+		flex-direction: column;
 		min-width: 0;
 	}
 
@@ -331,6 +475,7 @@
 	}
 
 	.chart-panel {
+		flex: 1;
 		display: flex;
 		flex-direction: column;
 		gap: 8px;
@@ -381,9 +526,37 @@
 		border: 1px solid var(--offpeak);
 	}
 
+	.swatch.import {
+		background: var(--chart-fill-from);
+		border: 1px solid var(--chart-line);
+	}
+
+	.swatch.export {
+		background: var(--export-soft);
+		border: 1px solid var(--export-line);
+	}
+
 	.swatch.now {
 		background: var(--accent);
 		box-shadow: 0 0 10px var(--accent);
+	}
+
+	.legend-item.toggle {
+		background: none;
+		border: none;
+		padding: 0;
+		color: var(--text-muted);
+		font: inherit;
+		font-size: 0.82rem;
+		transition: color 0.2s;
+	}
+
+	.legend-item.toggle:hover {
+		color: var(--text);
+	}
+
+	.legend-item.toggle.off {
+		opacity: 0.45;
 	}
 
 	.chart-foot {
@@ -422,7 +595,7 @@
 	}
 
 	@media (max-width: 900px) {
-		.grid {
+		.block {
 			grid-template-columns: 1fr;
 		}
 	}

@@ -1,7 +1,9 @@
 import { apiGet, type FetchLike } from './client';
+import { getFamilyConfig } from './families';
 import { fetchProduct } from './product';
 import {
 	buildDaySlots,
+	INTELLIGENT_GO_WINDOW,
 	priceResolverFromBands,
 	priceResolverFromIntervals,
 	nextZonedDayStart
@@ -9,8 +11,12 @@ import {
 import type {
 	DayPrices,
 	OctopusProduct,
+	Paginated,
 	PriceInterval,
+	PriceSlot,
 	RegionCode,
+	TariffDirection,
+	TariffFamily,
 	TariffInfo,
 	UnitRate
 } from './types';
@@ -31,6 +37,7 @@ interface ResolvedTariff {
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+const MAX_RATE_PAGES = 10;
 
 function toIso(date: Date): string {
 	return date.toISOString().replace(/\.\d{3}Z$/, 'Z');
@@ -70,6 +77,10 @@ function unitRatesToIntervals(rates: readonly UnitRate[], fallbackEnd: Date): Pr
 		.filter((interval) => Number.isFinite(interval.priceIncVat));
 }
 
+/**
+ * Fetch unit rates for a window, following the API's `next` links. Agile publishes
+ * a rate for every half hour, so a multi-day window spans more than one page.
+ */
 async function fetchUnitRates(
 	productCode: string,
 	tariffCode: string,
@@ -81,13 +92,26 @@ async function fetchUnitRates(
 	const path =
 		`/products/${encodeURIComponent(productCode)}/electricity-tariffs/${encodeURIComponent(tariffCode)}/` +
 		`${endpoint}/?period_from=${toIso(from)}&period_to=${toIso(to)}`;
-	const data = await apiGet<{ results: UnitRate[] }>(path, { fetchFn });
-	return data.results ?? [];
+
+	const results: UnitRate[] = [];
+	let next: string | null = path;
+
+	for (let page = 0; page < MAX_RATE_PAGES && next; page++) {
+		const data: Paginated<UnitRate> = await apiGet(next, { fetchFn });
+		results.push(...(data.results ?? []));
+		next = data.next;
+	}
+
+	return results;
 }
 
 export interface FetchDayPricesArgs {
 	productCode: string;
 	region: RegionCode;
+	/** Which tariff family the product belongs to. Defaults to Intelligent Go. */
+	family?: TariffFamily;
+	/** Whether the tariff is for imported or exported electricity. Defaults to import. */
+	direction?: TariffDirection;
 	/** Any instant within the local day to price. Defaults to "now". */
 	date?: Date;
 	fetchFn?: FetchLike;
@@ -98,16 +122,28 @@ export interface FetchDayPricesArgs {
  * Fetch the full day's half-hourly unit rates for a region.
  *
  * Strategy:
- *  1. Prefer the `standard-unit-rates` endpoint, which for Intelligent Go
- *     products encodes the real peak/off-peak schedule.
- *  2. If it returns nothing (as the newest four-rate products do), fall back to
- *     the day/night rates and derive the schedule from the published window.
+ *  1. Prefer the `standard-unit-rates` endpoint, which encodes either the real
+ *     Intelligent Go schedule or the half-hourly Agile prices.
+ *  2. For Intelligent Go only, if it returns nothing (as the newest four-rate
+ *     products do), fall back to the day/night rates and derive a schedule.
  */
 export async function fetchDayPrices(args: FetchDayPricesArgs): Promise<DayPrices> {
-	const { productCode, region, date = new Date(), fetchFn, timeZone = LONDON_TZ } = args;
+	const {
+		productCode,
+		region,
+		family = 'intelligent-go',
+		direction = 'import',
+		date = new Date(),
+		fetchFn,
+		timeZone = LONDON_TZ
+	} = args;
 
 	const product = await fetchProduct(productCode, fetchFn);
 	const { kind, tariff } = pickTariff(product, region);
+
+	// The family's fixed cheap window drives the derived day/night fallback,
+	// e.g. Intelligent Go 23:30–05:30 vs classic Octopus Go 00:30–04:30.
+	const window = getFamilyConfig(family).window ?? INTELLIGENT_GO_WINDOW;
 
 	const dayStart = startOfZonedDay(date, timeZone);
 	const dayEnd = nextZonedDayStart(dayStart, timeZone);
@@ -123,13 +159,14 @@ export async function fetchDayPrices(args: FetchDayPricesArgs): Promise<DayPrice
 		fetchFn
 	);
 
-	let slots;
-	let source: DayPrices['source'];
+	let slots: PriceSlot[];
+	let source: DayPrices['source'] = 'schedule';
 
 	if (scheduled.length > 0) {
-		source = 'schedule';
 		const resolver = priceResolverFromIntervals(unitRatesToIntervals(scheduled, fetchTo));
-		slots = buildDaySlots(date, resolver, timeZone);
+		slots = buildDaySlots(date, resolver, window, timeZone);
+	} else if (family === 'agile') {
+		throw new PriceLookupError(`No half-hourly prices found for Agile tariff "${tariff.code}".`);
 	} else {
 		source = 'derived';
 		const { peak, offPeak } = await resolveBandPrices(
@@ -140,12 +177,17 @@ export async function fetchDayPrices(args: FetchDayPricesArgs): Promise<DayPrice
 			fetchTo,
 			fetchFn
 		);
-		slots = buildDaySlots(date, priceResolverFromBands(peak, offPeak, timeZone), timeZone);
+		slots = buildDaySlots(
+			date,
+			priceResolverFromBands(peak, offPeak, window, timeZone),
+			window,
+			timeZone
+		);
 	}
 
-	// Ensure every half-hour slot is priced; if the schedule had gaps, fill from
-	// the constant band rates so the chart is never partially empty.
-	if (slots.length === 0) {
+	// Ensure every half-hour slot is priced; if the Intelligent Go schedule had
+	// gaps, fill from the constant band rates so the chart is never partially empty.
+	if (slots.length === 0 && family !== 'agile') {
 		const { peak, offPeak } = await resolveBandPrices(
 			productCode,
 			tariff,
@@ -154,13 +196,29 @@ export async function fetchDayPrices(args: FetchDayPricesArgs): Promise<DayPrice
 			fetchTo,
 			fetchFn
 		);
-		slots = buildDaySlots(date, priceResolverFromBands(peak, offPeak, timeZone), timeZone);
+		slots = buildDaySlots(
+			date,
+			priceResolverFromBands(peak, offPeak, window, timeZone),
+			window,
+			timeZone
+		);
 		source = 'derived';
 	}
+
+	if (slots.length === 0) {
+		throw new PriceLookupError(`No prices could be determined for tariff "${tariff.code}".`);
+	}
+
+	// Re-classify off-peak with the family's own rules: Intelligent Go uses its
+	// fixed window, Agile compares each slot against the day's average price.
+	const offPeakFlags = getFamilyConfig(family).classifyOffPeak(slots);
+	slots = slots.map((slot, index) => ({ ...slot, offPeak: offPeakFlags[index] }));
 
 	return {
 		date: zonedDateKey(date, timeZone),
 		region,
+		family,
+		direction,
 		productCode,
 		productName: product.display_name,
 		tariffCode: tariff.code,

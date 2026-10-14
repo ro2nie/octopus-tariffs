@@ -1,8 +1,14 @@
 import { fetchDayPrices } from '#lib/octopus/prices';
 import { getRegionForPostcode } from '#lib/octopus/region';
+import { getFamilyConfig } from '#lib/octopus/families';
 import { isValidPostcode, normalizePostcode } from '#lib/octopus/postcode';
-import { listIntelligentGoProducts, selectDefaultProduct } from '#lib/octopus/product';
-import type { DayPrices, OctopusProductSummary, RegionCode } from '#lib/octopus/types';
+import { listExportProducts, listTariffProducts, selectDefaultProduct } from '#lib/octopus/product';
+import type {
+	DayPrices,
+	OctopusProductSummary,
+	RegionCode,
+	TariffFamily
+} from '#lib/octopus/types';
 import type { FetchLike } from '#lib/octopus/client';
 import {
 	deserializeDayPrices,
@@ -18,9 +24,13 @@ export const REFRESH_INTERVAL_MS = 10 * 60 * 1000;
 interface PersistedState {
 	postcode: string;
 	productCode: string;
+	family?: TariffFamily;
 	region: RegionCode | null;
 	productName: string | null;
+	outgoingProductCode?: string;
+	outgoingProductName?: string | null;
 	snapshot: SerializedDayPrices | null;
+	outgoing?: SerializedDayPrices | null;
 	savedAt: number | null;
 }
 
@@ -46,10 +56,15 @@ function storage(): Storage | null {
 export class TariffStore {
 	postcode = $state('');
 	productCode = $state('');
+	family = $state<TariffFamily>('intelligent-go');
 	region = $state<RegionCode | null>(null);
 	productName = $state<string | null>(null);
 	products = $state<OctopusProductSummary[]>([]);
 	prices = $state<DayPrices | null>(null);
+	/** Today's export (outgoing) prices, when the family has an export tariff. */
+	outgoing = $state<DayPrices | null>(null);
+	outgoingProductCode = $state('');
+	outgoingProductName = $state<string | null>(null);
 	status = $state<LoadStatus>('idle');
 	error = $state<string | null>(null);
 	lastUpdated = $state<Date | null>(null);
@@ -87,26 +102,52 @@ export class TariffStore {
 
 		try {
 			this.region = await getRegionForPostcode(postcode, this.#fetchFn);
-
-			const products = await listIntelligentGoProducts(this.#fetchFn);
-			if (products.length === 0) {
-				throw new Error('No Intelligent Octopus Go tariffs are currently available.');
-			}
-			this.products = products;
-
-			const selected =
-				products.find((product) => product.code === this.productCode) ??
-				selectDefaultProduct(products);
-			if (!selected) {
-				throw new Error('Could not select an Intelligent Octopus Go tariff.');
-			}
-			this.productCode = selected.code;
-			this.productName = selected.display_name;
-
-			await this.refresh();
+			await this.#discoverAndRefresh();
 		} catch (error) {
 			this.error = toMessage(error);
 			this.status = 'error';
+		}
+	}
+
+	/** Discover the current family's products and fetch the selected day's prices. */
+	async #discoverAndRefresh(): Promise<void> {
+		const products = await listTariffProducts(this.family, this.#fetchFn);
+		if (products.length === 0) {
+			throw new Error(`No ${getFamilyConfig(this.family).label} tariffs are currently available.`);
+		}
+		this.products = products;
+
+		const selected =
+			products.find((product) => product.code === this.productCode) ??
+			selectDefaultProduct(products);
+		if (!selected) {
+			throw new Error(`Could not select a ${getFamilyConfig(this.family).label} tariff.`);
+		}
+		this.productCode = selected.code;
+		this.productName = selected.display_name;
+
+		// Families with an export tariff (e.g. Agile) also show the outgoing series.
+		const exportProducts = await listExportProducts(this.family, this.#fetchFn);
+		const outgoing = selectDefaultProduct(exportProducts);
+		this.outgoingProductCode = outgoing?.code ?? '';
+		this.outgoingProductName = outgoing?.display_name ?? null;
+
+		await this.refresh();
+	}
+
+	/** Fetch the export product's prices, or null when there is none/unavailable. */
+	async #fetchOutgoing(): Promise<DayPrices | null> {
+		if (!this.outgoingProductCode || !this.region) return null;
+		try {
+			return await fetchDayPrices({
+				productCode: this.outgoingProductCode,
+				region: this.region,
+				family: this.family,
+				direction: 'export',
+				fetchFn: this.#fetchFn
+			});
+		} catch {
+			return null;
 		}
 	}
 
@@ -118,9 +159,11 @@ export class TariffStore {
 			const prices = await fetchDayPrices({
 				productCode: this.productCode,
 				region: this.region,
+				family: this.family,
 				fetchFn: this.#fetchFn
 			});
 			this.prices = prices;
+			this.outgoing = await this.#fetchOutgoing();
 			// The timestamp is always replaced wholesale, so a plain Date is safe here.
 			// eslint-disable-next-line svelte/prefer-svelte-reactivity
 			this.lastUpdated = new Date();
@@ -133,12 +176,37 @@ export class TariffStore {
 		}
 	}
 
-	/** Switch to a different Intelligent Octopus Go product and reload. */
+	/** Switch to a different product within the current family and reload. */
 	async selectProduct(code: string): Promise<void> {
 		if (code === this.productCode) return;
 		this.productCode = code;
 		this.productName = this.products.find((product) => product.code === code)?.display_name ?? null;
 		await this.refresh();
+	}
+
+	/** Switch tariff family (e.g. Intelligent Go ↔ Agile), rediscovering products. */
+	async setFamily(family: TariffFamily): Promise<void> {
+		if (family === this.family) return;
+		this.family = family;
+		this.productCode = '';
+		this.productName = null;
+		this.products = [];
+		this.prices = null;
+		this.outgoing = null;
+		this.outgoingProductCode = '';
+		this.outgoingProductName = null;
+		this.error = null;
+		this.#persist();
+
+		if (!this.postcode || !this.region) return;
+
+		this.status = 'loading';
+		try {
+			await this.#discoverAndRefresh();
+		} catch (error) {
+			this.error = toMessage(error);
+			this.status = 'error';
+		}
 	}
 
 	/** Forget the saved postcode and snapshot. */
@@ -149,6 +217,9 @@ export class TariffStore {
 		this.productName = null;
 		this.products = [];
 		this.prices = null;
+		this.outgoing = null;
+		this.outgoingProductCode = '';
+		this.outgoingProductName = null;
 		this.status = 'idle';
 		this.error = null;
 		this.lastUpdated = null;
@@ -163,10 +234,16 @@ export class TariffStore {
 			const parsed = JSON.parse(raw) as PersistedState;
 			this.postcode = parsed.postcode ?? '';
 			this.productCode = parsed.productCode ?? '';
+			this.family = parsed.family ?? 'intelligent-go';
 			this.region = parsed.region ?? null;
 			this.productName = parsed.productName ?? null;
+			this.outgoingProductCode = parsed.outgoingProductCode ?? '';
+			this.outgoingProductName = parsed.outgoingProductName ?? null;
 			if (parsed.snapshot) {
 				this.prices = deserializeDayPrices(parsed.snapshot);
+			}
+			if (parsed.outgoing) {
+				this.outgoing = deserializeDayPrices(parsed.outgoing);
 			}
 			this.status = this.prices ? 'ready' : 'idle';
 		} catch {
@@ -181,9 +258,13 @@ export class TariffStore {
 		const state: PersistedState = {
 			postcode: this.postcode,
 			productCode: this.productCode,
+			family: this.family,
 			region: this.region,
 			productName: this.productName,
+			outgoingProductCode: this.outgoingProductCode,
+			outgoingProductName: this.outgoingProductName,
 			snapshot: this.prices ? serializeDayPrices(this.prices) : null,
+			outgoing: this.outgoing ? serializeDayPrices(this.outgoing) : null,
 			savedAt: this.lastUpdated ? this.lastUpdated.getTime() : null
 		};
 
