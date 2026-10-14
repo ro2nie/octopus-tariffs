@@ -19,10 +19,14 @@ export const INTELLIGENT_GO_WINDOW: OffPeakWindow = {
 	endMinutes: 5 * 60 + 30 // 05:30
 };
 
-/** Classic Octopus Go's four cheaper hours: "00:30 - 04:30 every night". */
+/**
+ * Octopus Go's five cheaper hours: "00:30 - 05:30 every night". The API
+ * publishes this in UTC (23:30-04:30Z under BST, 00:30-05:30Z under GMT), so it
+ * is a constant 00:30-05:30 in local time year-round.
+ */
 export const OCTOPUS_GO_WINDOW: OffPeakWindow = {
 	startMinutes: 0 * 60 + 30, // 00:30
-	endMinutes: 4 * 60 + 30 // 04:30
+	endMinutes: 5 * 60 + 30 // 05:30
 };
 
 /** Intelligent Go's window bounds, kept for backwards compatibility. */

@@ -142,7 +142,7 @@ export async function fetchDayPrices(args: FetchDayPricesArgs): Promise<DayPrice
 	const { kind, tariff } = pickTariff(product, region);
 
 	// The family's fixed cheap window drives the derived day/night fallback,
-	// e.g. Intelligent Go 23:30–05:30 vs classic Octopus Go 00:30–04:30.
+	// e.g. Intelligent Go 23:30–05:30 vs Octopus Go 00:30–05:30.
 	const window = getFamilyConfig(family).window ?? INTELLIGENT_GO_WINDOW;
 
 	const dayStart = startOfZonedDay(date, timeZone);

@@ -116,14 +116,14 @@ const GO_PRODUCT: OctopusProduct = {
 	}
 };
 
-/** Classic Octopus Go: cheap 00:30–04:30, peak the rest of the day (GMT). */
+/** Octopus Go: cheap 00:30–05:30, peak the rest of the day (GMT). */
 const GO_RATES = {
 	count: 3,
 	results: [
 		{
 			value_inc_vat: 44,
 			value_exc_vat: 41.9,
-			valid_from: '2026-01-14T04:30:00Z',
+			valid_from: '2026-01-14T05:30:00Z',
 			valid_to: '2026-01-15T00:30:00Z',
 			payment_method: null
 		},
@@ -131,13 +131,13 @@ const GO_RATES = {
 			value_inc_vat: 12,
 			value_exc_vat: 11.43,
 			valid_from: '2026-01-15T00:30:00Z',
-			valid_to: '2026-01-15T04:30:00Z',
+			valid_to: '2026-01-15T05:30:00Z',
 			payment_method: null
 		},
 		{
 			value_inc_vat: 44,
 			value_exc_vat: 41.9,
-			valid_from: '2026-01-15T04:30:00Z',
+			valid_from: '2026-01-15T05:30:00Z',
 			valid_to: null,
 			payment_method: null
 		}
@@ -404,7 +404,7 @@ describe('fetchDayPrices (Agile)', () => {
 });
 
 describe('fetchDayPrices (Octopus Go)', () => {
-	it('builds slots from the published schedule and flags 00:30–04:30 off-peak', async () => {
+	it('builds slots from the published schedule and flags 00:30–05:30 off-peak', async () => {
 		const { fetchFn } = createFetchMock({
 			'standard-unit-rates': GO_RATES,
 			'/products/GO-VAR-22-10-14/': GO_PRODUCT
@@ -437,7 +437,13 @@ describe('fetchDayPrices (Octopus Go)', () => {
 		expect(overnight.offPeak).toBe(true);
 
 		const morning = prices.slots.find((s) => s.start.toISOString() === '2026-01-15T04:30:00.000Z')!;
-		expect(morning.priceIncVat).toBe(44);
-		expect(morning.offPeak).toBe(false);
+		expect(morning.priceIncVat).toBe(12);
+		expect(morning.offPeak).toBe(true);
+
+		const afterWindow = prices.slots.find(
+			(s) => s.start.toISOString() === '2026-01-15T05:30:00.000Z'
+		)!;
+		expect(afterWindow.priceIncVat).toBe(44);
+		expect(afterWindow.offPeak).toBe(false);
 	});
 });

@@ -10,7 +10,7 @@ Built with **SvelteKit 2 (Svelte 5 runes)** and deployed as a static client-rend
 ## Features
 
 - **Tariff family toggle** — switch between **Intelligent Octopus Go** (fixed 23:30–05:30
-  off-peak window), **Octopus Go** (fixed 00:30–04:30 off-peak window) and **Agile Octopus**
+  off-peak window), **Octopus Go** (fixed 00:30–05:30 off-peak window) and **Agile Octopus**
   (half-hourly wholesale prices that change daily). Each family has its own product picker.
 - **Agile Outgoing export** — on Agile, the **Agile Outgoing** export price is shown with its
   own "right now" card and day stats beneath the import ones, and its curve is plotted in a
@@ -50,7 +50,7 @@ All data comes from the public, unauthenticated [Octopus Energy REST API](https:
 4. **Normalisation**: rates are turned into 48 half-hour slots for the `Europe/London` day
    (46 or 50 on DST transition days), always VAT-inclusive (`value_inc_vat`).
 5. **Off-peak**: Intelligent Go marks the fixed **23:30–05:30** window as off-peak, and
-   Octopus Go the fixed **00:30–04:30** window. Agile has no fixed window, so each half-hour is
+   Octopus Go the fixed **00:30–05:30** window. Agile has no fixed window, so each half-hour is
    compared against the day's average price (cheaper half-hours are highlighted).
 6. **Export**: for Agile, the matching **Agile Outgoing** product is discovered and its
    half-hourly export rates are fetched the same way, then rendered as a second chart beneath

@@ -39,11 +39,11 @@ describe('isWithinWindow', () => {
 	});
 
 	it('handles a window within the same day', () => {
-		// Octopus Go: 00:30 – 04:30.
+		// Octopus Go: 00:30 – 05:30.
 		expect(isWithinWindow(0, OCTOPUS_GO_WINDOW)).toBe(false);
 		expect(isWithinWindow(0 * 60 + 30, OCTOPUS_GO_WINDOW)).toBe(true);
-		expect(isWithinWindow(4 * 60 + 29, OCTOPUS_GO_WINDOW)).toBe(true);
-		expect(isWithinWindow(4 * 60 + 30, OCTOPUS_GO_WINDOW)).toBe(false);
+		expect(isWithinWindow(5 * 60 + 29, OCTOPUS_GO_WINDOW)).toBe(true);
+		expect(isWithinWindow(5 * 60 + 30, OCTOPUS_GO_WINDOW)).toBe(false);
 		expect(isWithinWindow(12 * 60, OCTOPUS_GO_WINDOW)).toBe(false);
 	});
 });
@@ -53,7 +53,8 @@ describe('isOffPeakInstant (Octopus Go)', () => {
 		['2026-01-15T00:00:00Z', false],
 		['2026-01-15T00:30:00Z', true],
 		['2026-01-15T04:29:00Z', true],
-		['2026-01-15T04:30:00Z', false],
+		['2026-01-15T05:29:00Z', true],
+		['2026-01-15T05:30:00Z', false],
 		['2026-01-15T12:00:00Z', false],
 		['2026-01-15T23:30:00Z', false]
 	])('classifies %s as offPeak=%s', (iso, expected) => {
@@ -77,11 +78,11 @@ describe('getOffPeakStatus', () => {
 		expect(status.label).toBe('Off-peak starts');
 	});
 
-	it('uses the given window (Octopus Go 00:30 – 04:30)', () => {
+	it('uses the given window (Octopus Go 00:30 – 05:30)', () => {
 		const within = getOffPeakStatus(new Date('2026-01-15T02:00:00Z'), OCTOPUS_GO_WINDOW);
 		expect(within.offPeak).toBe(true);
 		expect(within.changesTo).toBe(false);
-		expect(within.changesAt.toISOString()).toBe('2026-01-15T04:30:00.000Z');
+		expect(within.changesAt.toISOString()).toBe('2026-01-15T05:30:00.000Z');
 
 		const outside = getOffPeakStatus(new Date('2026-01-15T12:00:00Z'), OCTOPUS_GO_WINDOW);
 		expect(outside.offPeak).toBe(false);
